@@ -45,6 +45,7 @@ protected:
   int                stepSize;         // amount (in frames) by which consecutive blocks differ
   int                framesInPlugBuf;  // number of frames in plugin buffers since last call to plugin->process()
   bool               isOutputBinary;   // if true, output from plugin is not text.  For text outputs, if
+  bool               acceptsRawSamples;// if true, plugin accepts data as raw interleaved S16_LE samples at native rate
   int                resampleDecim;    // the number of incoming hardware frames to combine into a frame for the plugin
   float              resampleScale;    // scale factor for a sum of hardware samples
   int                resampleCountdown; // number of hardware frames left to get before we have a resampled frame

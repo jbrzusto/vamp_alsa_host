@@ -53,11 +53,22 @@ int PluginRunner::loadPlugin() {
     blockSize = stepSize;
   }
 
-  // allocate buffers to transfer float audio data to plugin
-
+  // allocate buffers to transfer data to plugin
+  // this will be pointers to float buffers unless
+  // the plugin accepts raw samples, in which case the
+  // first pointer is to a float buffer of sufficient
+  // size to hold interleaved S16_LE samples, and the
+  // second pointer is NULL
+  
   plugbuf = new float*[numChan];
-  for (unsigned c = 0; c < numChan; ++c)
-    plugbuf[c] = new float[blockSize + 2];  // FIXME: is "+2" only to leave room for DFT?
+
+  if (acceptsRawSamples) {
+    plugbuf[0] = new float[blockSize * numChan * sizeof(uint16_t) / sizeof(float)];
+    plugbuf[1] = 0;
+  } else {
+    for (unsigned c = 0; c < numChan; ++c)
+      plugbuf[c] = new float[blockSize + 2];  // FIXME: is "+2" only to leave room for DFT?
+  }
 
   // make sure the named output is valid
         
@@ -101,6 +112,9 @@ int PluginRunner::loadPlugin() {
   for (PluginBase::ParameterList::iterator ipa = plist.begin(); ipa != plist.end(); ++ipa) {
     if (ipa->identifier == "isForVampAlsaHost") {
       plugin->setParameter(ipa->identifier, 1.0);
+    } else if (ipa->identifier == "acceptsRawSamples") {
+      plugin->setParameter(ipa->identifier, 1.0);
+      acceptsRawSamples = true;
     } else if (ipa->identifier == "isOutputBinary" && ipa->isQuantized &&
                ipa->minValue == ipa->maxValue) {
       isOutputBinary = true;
@@ -177,89 +191,136 @@ void PluginRunner::removeAllOutputListeners() {
 void PluginRunner::handleData(snd_pcm_sframes_t avail, int16_t *src0, int16_t *src1, int step, double frameTimestamp) {
   // alsaHandler has some data for us.  If src1 is NULL, it's only one channel; otherwise it's two channels
 
-  int pfs0 = partialFrameSum[0];
-  int pfs1 = partialFrameSum[1];
-  int rc = resampleCountdown;
-  
-  // get timestamp of first (hardware) frame in plugin's buffer
-  frameTimestamp -= (double) framesInPlugBuf / rate + (double) (resampleDecim - rc) / hwRate;
+  if (acceptsRawSamples) {
+    // get timestamp of first (hardware) frame in plugin's buffer
+    frameTimestamp -= (double) framesInPlugBuf / rate;
 
-  while (avail > 0) {
-    int hw_frames_to_copy = std::min((int) avail, (blockSize - framesInPlugBuf - 1) * resampleDecim + rc);
-    avail -= hw_frames_to_copy;
-    int decimated_frame_count = (hw_frames_to_copy + (resampleDecim - rc)) / resampleDecim;
-    float *pb0, *pb1;
-    pb0 = plugbuf[0] + framesInPlugBuf;
+    while (avail > 0) {
+      int hw_frames_to_copy = std::min((int) avail, blockSize - framesInPlugBuf);
+      avail -= hw_frames_to_copy;
+      int16_t *pb0 = (int16_t *)(plugbuf[0]) + framesInPlugBuf * numChan; // FIXME: hardcoded S16_LE
 
-    // choose an inner loop, depending on number of channels
-    if (src1) {
-      // two channels
-      pb1 = plugbuf[1] + framesInPlugBuf;
-      while (hw_frames_to_copy) {
-        pfs0 += *src0;
-        pfs1 += *src1;
-        src0 += step;
-        src1 += step;
-        --hw_frames_to_copy;
-        --rc;
-        if (rc == 0) {
-          *pb0++ = pfs0 * resampleScale;
-          *pb1++ = pfs1 * resampleScale;
-          pfs0 = pfs1 = 0;
-          rc = resampleDecim;
-        }
-      }
-    } else {
-      // one channel
-      while (hw_frames_to_copy) {
-        pfs0 += *src0;
-        src0 += step;
-        --hw_frames_to_copy;
-        --rc;
-        if (rc == 0) {
-          *pb0++ = pfs0 * resampleScale;
-          pfs0 = 0;
-          rc = resampleDecim;
-        }
-      }
-    }
-    framesInPlugBuf += decimated_frame_count;
-    totalFrames += decimated_frame_count;
-    if (framesInPlugBuf == blockSize) {
-      // time to call the plugin
+      memcpy (pb0, src0, sizeof(int16_t) * numChan * hw_frames_to_copy);
+
+      // choose an inner loop, depending on number of channels
+      framesInPlugBuf += hw_frames_to_copy;
+      totalFrames += hw_frames_to_copy;
+
+      if (framesInPlugBuf == blockSize) {
+        // time to call the plugin
           
-      RealTime rt = RealTime::fromSeconds( frameTimestamp );
-      outputFeatures(plugin->process(plugbuf, rt), label);
+        RealTime rt = RealTime::fromSeconds( frameTimestamp );
+        outputFeatures(plugin->process(plugbuf, rt), label);
 
-      // shift samples if we're not advancing by a full
-      // block.
-      // Too bad the VAMP specs don't let the
-      // process() function deal with two segments for each
-      // buffer; then we wouldn't need these wastefull calls
-      // to memmove!  MAYBE FIXME: fake this by changing our own
-      // plugin to have blockSize = stepSize and deal
-      // internally with handling overlap!  Then fix this
-      // code so copying from alsa's mmap segment is done in
-      // one pass for all plugins waiting on a device, then
-      // the mmap segment is marked as available, then
-      // another pass calls process() on all plugins with
-      // full buffers.
+        // shift samples if we're not advancing by a full
+        // block.
+        // Too bad the VAMP specs don't let the
+        // process() function deal with two segments for each
+        // buffer; then we wouldn't need these wastefull calls
+        // to memmove!  MAYBE FIXME: fake this by changing our own
+        // plugin to have blockSize = stepSize and deal
+        // internally with handling overlap!  Then fix this
+        // code so copying from alsa's mmap segment is done in
+        // one pass for all plugins waiting on a device, then
+        // the mmap segment is marked as available, then
+        // another pass calls process() on all plugins with
+        // full buffers.
 
-      if (stepSize < blockSize) {
-        memmove(&plugbuf[0][0], &plugbuf[0][stepSize], (blockSize - stepSize) * sizeof(float));
-        if (src1)
-          memmove(&plugbuf[1][0], &plugbuf[1][stepSize], (blockSize - stepSize) * sizeof(float));
-        framesInPlugBuf = blockSize - stepSize;
-        frameTimestamp += (double) stepSize / rate;
-      } else {
-        framesInPlugBuf = 0;
-        frameTimestamp += (double) blockSize / rate;
+        if (stepSize < blockSize) {
+          memmove(&plugbuf[0][0], (int16_t *) (plugbuf[0]) + stepSize * numChan, (blockSize - stepSize) * numChan * sizeof(int16_t)); // FIXME: hardcoded S16_LE
+          framesInPlugBuf = blockSize - stepSize;
+          frameTimestamp += (double) stepSize / rate;
+        } else {
+          framesInPlugBuf = 0;
+          frameTimestamp += (double) blockSize / rate;
+        }
       }
     }
+  } else {
+    int pfs0 = partialFrameSum[0];
+    int pfs1 = partialFrameSum[1];
+    int rc = resampleCountdown;
+  
+    // get timestamp of first (hardware) frame in plugin's buffer
+    frameTimestamp -= (double) framesInPlugBuf / rate + (double) (resampleDecim - rc) / hwRate;
+
+    while (avail > 0) {
+      int hw_frames_to_copy = std::min((int) avail, (blockSize - framesInPlugBuf - 1) * resampleDecim + rc);
+      avail -= hw_frames_to_copy;
+      int decimated_frame_count = (hw_frames_to_copy + (resampleDecim - rc)) / resampleDecim;
+      float *pb0, *pb1;
+      pb0 = plugbuf[0] + framesInPlugBuf;
+
+      // choose an inner loop, depending on number of channels
+      if (src1) {
+        // two channels
+        pb1 = plugbuf[1] + framesInPlugBuf;
+        while (hw_frames_to_copy) {
+          pfs0 += *src0;
+          pfs1 += *src1;
+          src0 += step;
+          src1 += step;
+          --hw_frames_to_copy;
+          --rc;
+          if (rc == 0) {
+            *pb0++ = pfs0 * resampleScale;
+            *pb1++ = pfs1 * resampleScale;
+            pfs0 = pfs1 = 0;
+            rc = resampleDecim;
+          }
+        }
+      } else {
+        // one channel
+        while (hw_frames_to_copy) {
+          pfs0 += *src0;
+          src0 += step;
+          --hw_frames_to_copy;
+          --rc;
+          if (rc == 0) {
+            *pb0++ = pfs0 * resampleScale;
+            pfs0 = 0;
+            rc = resampleDecim;
+          }
+        }
+      }
+      framesInPlugBuf += decimated_frame_count;
+      totalFrames += decimated_frame_count;
+      if (framesInPlugBuf == blockSize) {
+        // time to call the plugin
+          
+        RealTime rt = RealTime::fromSeconds( frameTimestamp );
+        outputFeatures(plugin->process(plugbuf, rt), label);
+
+        // shift samples if we're not advancing by a full
+        // block.
+        // Too bad the VAMP specs don't let the
+        // process() function deal with two segments for each
+        // buffer; then we wouldn't need these wastefull calls
+        // to memmove!  MAYBE FIXME: fake this by changing our own
+        // plugin to have blockSize = stepSize and deal
+        // internally with handling overlap!  Then fix this
+        // code so copying from alsa's mmap segment is done in
+        // one pass for all plugins waiting on a device, then
+        // the mmap segment is marked as available, then
+        // another pass calls process() on all plugins with
+        // full buffers.
+
+        if (stepSize < blockSize) {
+          memmove(&plugbuf[0][0], &plugbuf[0][stepSize], (blockSize - stepSize) * sizeof(float));
+          if (src1)
+            memmove(&plugbuf[1][0], &plugbuf[1][stepSize], (blockSize - stepSize) * sizeof(float));
+          framesInPlugBuf = blockSize - stepSize;
+          frameTimestamp += (double) stepSize / rate;
+        } else {
+          framesInPlugBuf = 0;
+          frameTimestamp += (double) blockSize / rate;
+        }
+      }
+    }
+    partialFrameSum[0] = pfs0;
+    partialFrameSum[1] = pfs1;
+    resampleCountdown = rc;
   }
-  partialFrameSum[0] = pfs0;
-  partialFrameSum[1] = pfs1;
-  resampleCountdown = rc;
 };
 
 void
