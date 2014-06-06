@@ -101,6 +101,8 @@ protected:
   int do_start(double timeNow);
   void do_stop(double timeNow);
 
+  int32_t dc_offset[2]; // DC offset per channel.  We use the upper signed 16 bit quantity as the offset; each new sample is added in the lower 16 bits.
+  
 };
 
 #endif // ALSAMINDER_HPP

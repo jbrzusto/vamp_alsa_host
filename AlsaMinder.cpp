@@ -157,7 +157,7 @@ AlsaMinder::AlsaMinder(const string &alsaDev, int rate, unsigned int numChan, co
     delete_privates();
     throw std::runtime_error("Could not open audio device or could not set required parameters");
   }
-
+  dc_offset[0] = dc_offset[1] = 0;
 };
 
 AlsaMinder::~AlsaMinder() {
@@ -256,6 +256,28 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
       totalFrames += avail;
       int16_t *src0, *src1=0; // avoid compiler warning
       int step;
+      
+      src0 = (int16_t *) (((unsigned char *) areas[0].addr) + areas[0].first / 8);
+      step = areas[0].step / 16; // FIXME:  hardcoding S16_LE assumption
+      src0 += step * offset;
+      
+      if (numChan == 2) {
+        src1 = (int16_t *) (((unsigned char *) areas[1].addr) + areas[1].first / 8);
+        src1 += step * offset;
+      }
+
+      /* do DC offset removal in place, so everything downstream is affected */
+
+      for (int i = 0; i < avail; ++i) {
+        dc_offset[0] = (dc_offset[0] << 12 - dc_offset[0] + src0[i]) >> 12;
+        src0[i] -= dc_offset[0] >> 16;
+      }
+      if (numChan == 2) {
+        for (int i = 0; i < avail; ++i) {
+          dc_offset[1] = (dc_offset[1] << 12 - dc_offset[1] + src1[i]) >> 12;
+          src1[i] -= dc_offset[1] >> 16;
+        }
+      }
 
       /*
         if a raw output listener exists, queue the new data onto it
@@ -285,7 +307,7 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
             rawSamples[i] = roundf(dthetaScale * dtheta);
           }
         } else {
-          for (unsigned i=0; i < avail * numChan; ++i) {
+          for (unsigned i=0, j = avail * numChan; i < j; ++i) {
             rawSamples[i] = *src0;
             //            src0 += step;
             ++src0;
