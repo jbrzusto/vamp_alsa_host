@@ -10,20 +10,25 @@
 
 using namespace std;
 
+#include <boost/circular_buffer.hpp>
 #include <alsa/asoundlib.h>
 
 #include "Pollable.hpp"
 #include "PluginRunner.hpp"
 #include "WavFileHeader.hpp"
+#include "AudioAdapter.hpp"
+//class AudioAdapter;
 
-typedef std::map < string, weak_ptr < Pollable > > RawListenerSet;
-typedef std::map < string, weak_ptr < PluginRunner > > PluginRunnerSet;
+typedef int16_t sample_t;
+typedef boost::circular_buffer < sample_t > circBuf;
+typedef std::map < string, AudioAdapter * > ListenerSet;
 
 class AlsaMinder : public Pollable {
 public:
 
-  static const int  PERIOD_FRAMES         = 4800;   // 40 periods per second for FCD Pro +; 20 periods per second for FCD Pro
-  static const int  BUFFER_FRAMES         = 131072; // 128K appears to be max buffer size in frames; this is 0.683 s for FCD Pro+, 1.365 s for FCD Pro
+
+  static const int  PERIOD_FRAMES         = 9600;   // 20 periods per second @ 192kHz, 10 @ 96 kHz, 5 @ 48 kHz
+  static const int  BUFFER_FRAMES         = 131072; // 128K appears to be max buffer size in frames
   static const int  MAX_AUDIO_QUIET_TIME  = 10;     // 10 second maximum quiet time before we decide an audio data stream is dry and try restart it
   static const int  MAX_CHANNELS          = 2;      // maximum of two channels per device
     
@@ -34,9 +39,8 @@ public:
 
 protected:
 
-  PluginRunnerSet   plugins;          // set of plugins accepting input from this device
-  RawListenerSet    rawListeners;     // listeners receiving raw output from this device, if
-                                      // any.
+  ListenerSet       listeners;        // set of listeners.  For each, we maintain a circular buffer of size 2 * PERIOD_FRAMES frames;
+
   snd_pcm_t *       pcm;              // handle to open pcm device
   snd_pcm_uframes_t buffer_frames;    // buffer size given to us by ALSA (we attempt to specify
                                       // it)
@@ -59,22 +63,12 @@ protected:
                                       // while we polled it? (this would have stopped it)
   int               numFD;            // number of file descriptors required for polling on this
                                       // device
-  bool              demodFMForRaw;    // if true, any rawListeners receive FM-demodulated
-                                      // samples (reducing stereo to mono)
-  float             demodFMLastTheta; // value of previous phase angle for FM demodulation (in
-                                      // range -pi..pi)
-  int16_t           downSampleFactor; // by what factor do we downsample input audio for raw listeners
-  int16_t           downSampleCount[MAX_CHANNELS];  // count of how many samples we've accumulated since last down sample
-  int32_t           downSampleAccum[MAX_CHANNELS];  // accumulator for downsampling
 
 public:
 
   int open();
-  void addPluginRunner(std::string &label, shared_ptr < PluginRunner > pr);
-  void removePluginRunner(std::string &label);
-  void addRawListener(string &label, int downSampleFactor, bool writeWavHeader = false);
-  void removeRawListener(string &label);
-  void removeAllRawListeners();
+  void addListener (string & label, AudioAdapter *ad); // label is the Pollable label of the consumer
+  void removeListener (string & label);
 
   AlsaMinder(const string &alsaDev, int rate, unsigned int numChan, const string &label, double now);
 
@@ -93,8 +87,10 @@ public:
   virtual void handleEvents ( struct pollfd *pollfds, bool timedOut, double timeNow);
   int start(double timeNow);
   void stop(double timeNow);
-  void setDemodFMForRaw(bool demod);
-
+  
+  int getNumListeners() { return listeners.size();};
+  AudioAdapter * getFirstListener() { return listeners.begin()->second; };
+  
 protected:
   
   void delete_privates();

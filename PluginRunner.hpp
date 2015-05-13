@@ -41,6 +41,7 @@ protected:
   long long          totalFeatures;    // total number of "features" (e.g. lotek pulses) seen on this FCD
   Plugin *           plugin;           // VAMP plugin we'll be running on this fcd
   float **           plugbuf;          // pointer to one buffer for each channel (left, right) of float data for plugin
+  float *            winBuf;           // pointer to buffer of windowing coefficients for requested block size, when supply FreqDomain data
   int                outputNo;         // index of plugin output corresponding to pluginOutput
   int                blockSize;        // size (in frames) of blocks sent to plugin
   int                stepSize;         // amount (in frames) by which consecutive blocks differ
@@ -51,6 +52,7 @@ protected:
   int                resampleCountdown; // number of hardware frames left to get before we have a resampled frame
   int *              partialFrameSum;  // partial frame sums from previous call to handleData
   double             lastFrametimestamp; // frame timestamp from prvious call to handleData
+  bool               freqDomain;       // true when plugin receives data in frequency domain
 
   // the output buffer gets filled before it can be written to a socket,
   // the oldest output is discarded line by line, so that any output line
@@ -68,7 +70,9 @@ public:
   void removeAllOutputListeners();
 
   int loadPlugin();
-  void handleData(long avail, int16_t *src0, int16_t *src1, int step, double frameTimestamp);
+  //  void handleData(long avail, int16_t *src0, int16_t *src1, int step, double frameTimestamp);
+  bool queueOutput(const char *p, uint32_t len, double timestamp);
+
   void outputFeatures(Plugin::FeatureSet features, string prefix);
   string toJSON();
 
@@ -86,8 +90,19 @@ public:
 
   void setParameters(ParamSet &ps);
 
+  bool getFreqDomain() { return freqDomain;};
+  
+  int getBlockSize() { return blockSize;};
+
+  int getStepSize() { return stepSize;};
+
+  float ** getPlugBuf() { return plugbuf;};
+
 private:
   void delete_privates();
+
+  float *hammingWindow(int N);
+  
 };
 
 

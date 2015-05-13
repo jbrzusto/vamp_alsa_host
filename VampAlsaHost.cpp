@@ -8,6 +8,7 @@
 #include "AlsaMinder.hpp"
 #include "PluginRunner.hpp"
 #include "WavFileWriter.hpp"
+#include "AudioAdapter.hpp"
 #include <time.h>
 
 VampAlsaHost::VampAlsaHost()
@@ -88,10 +89,12 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
       if (word == "rawStream") {
         // set fm on/off and add a raw listener
         // cancelling the listen will close the connection.
-        p->setDemodFMForRaw(frames);
-        p->addRawListener(connLabel, round(p->hwRate / rate), true);
+        AudioAdapter * aa = new AudioAdapter (p->rate, p->hwRate, p->numChan, p->PERIOD_FRAMES, 
+                                          frames ? AudioAdapter::OT_FM : AudioAdapter::OT_INT,
+                                              0, 0, connLabel, 0, true, 0);
+        p->addListener(connLabel, aa);
       } else if (word == "rawStreamOff") {
-        p->removeRawListener(connLabel);
+        p->removeListener(connLabel);
       } else if (word == "rawFile" || word == "rawFileOff") {
         std::string wavLabel = label + "_FileWriter";
         if (word == "rawFile") {
@@ -105,11 +108,14 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
               wav->resumeWithNewFile(path_template);
             } else {
               new WavFileWriter (label, wavLabel, path_template, frames, rate, p->numChan);
-              p->addRawListener(wavLabel, round(p->hwRate / rate));
+              AudioAdapter * aa = new AudioAdapter (p->rate, p->hwRate, p->numChan, p->PERIOD_FRAMES, 
+                                                    frames ? AudioAdapter::OT_FM : AudioAdapter::OT_INT,
+                                                    0, 0, wavLabel, 0, false, frames);
+              p->addListener(wavLabel, aa);
             }
           }
         } else {
-          p->removeRawListener(wavLabel);
+          p->removeListener(wavLabel);
           Pollable::remove(wavLabel);
         }
         reply << "{}\n";
@@ -122,7 +128,7 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
     cmd >> label;
     AlsaMinder *p = dynamic_cast < AlsaMinder * > (Pollable::lookupByName(label));
     if (p) {
-      p->setDemodFMForRaw(word == "fmOn");
+      p->getFirstListener()->setOutputType(word == "fmOn" ? AudioAdapter::OT_FM : AudioAdapter::OT_INT);
     } else {
       reply << "{\"error\": \"Error: LABEL does not specify a known open device\"}\n";
     }
@@ -167,7 +173,13 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
         throw std::runtime_error(string("There is already a device or plugin with label '") + pluginLabel + "'");
       new PluginRunner(pluginLabel, devLabel, dev->rate, dev->hwRate, dev->numChan, pluginLib, pluginName, outputName, ps);
       shared_ptr < PluginRunner > plugin = static_pointer_cast < PluginRunner > (Pollable::lookupByNameShared(pluginLabel));
-      dev->addPluginRunner(pluginLabel, plugin);
+      AudioAdapter * aa = new AudioAdapter (dev->rate, dev->hwRate, dev->numChan, dev->PERIOD_FRAMES, 
+                                          plugin->getFreqDomain() ? AudioAdapter::OT_SPECTRUM : AudioAdapter::OT_FLOAT,
+                                          plugin->getBlockSize(),
+                                          plugin->getStepSize(),
+                                          pluginLabel,
+                                          plugin->getPlugBuf());
+      dev->addListener(pluginLabel, aa);
       if (! plugin->addOutputListener(defaultOutputListener))
         // the default output listener doesn't seem to exist any longer
         // so reset its name in case a subsequent connection has the same label

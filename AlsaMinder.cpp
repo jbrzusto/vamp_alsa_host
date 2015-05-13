@@ -6,10 +6,10 @@ void AlsaMinder::delete_privates() {
     snd_pcm_close(pcm);
     pcm = 0;
   }
-  for (PluginRunnerSet::iterator ip = plugins.begin(); ip != plugins.end(); /**/) {
-    Pollable::remove(ip->first);
-    PluginRunnerSet::iterator del = ip++;
-    plugins.erase(del);
+  for (ListenerSet::iterator il = listeners.begin(); il != listeners.end(); /**/) {
+    delete il->second;
+    ListenerSet::iterator del = il++;
+    listeners.erase(del);
   }
 };
     
@@ -102,43 +102,8 @@ int AlsaMinder::start(double timeNow) {
   return do_start(timeNow);
 };
 
-void AlsaMinder::addPluginRunner(std::string &label, shared_ptr < PluginRunner > pr) {
-  plugins[label] = pr;
-};
-
-void AlsaMinder::removePluginRunner(std::string &label) {
-  // remove plugin runner 
-  plugins.erase(label);
-};
-
-void AlsaMinder::addRawListener(string &label, int downSampleFactor, bool writeWavHeader) {
-  
-  shared_ptr < Pollable > sptr;
-  rawListeners[label] = sptr = Pollable::lookupByNameShared(label);
-  if (rawListeners.size() == 1) {
-    this->downSampleFactor = downSampleFactor;
-    for (int i=0; i < MAX_CHANNELS; ++i) {
-      downSampleAccum[i] = 0;
-      downSampleCount[i] = downSampleFactor;
-    }
-  }
-  if (writeWavHeader) {
-    Pollable *ptr = sptr.get();
-    if (ptr) {
-      // default max possible frames in .WAV header
-      // FIXME: hardcoded S16_LE format
-      WavFileHeader hdr(hwRate / downSampleFactor, numChan, 0x7ffffffe / 2);
-      ptr->queueOutput(hdr.address(), hdr.size());
-    }
-  }
-};
-
-void AlsaMinder::removeRawListener(string &label) {
-  rawListeners.erase(label);
-};
-
-void AlsaMinder::removeAllRawListeners() {
-  rawListeners.clear();
+void AlsaMinder::removeListener(string & label) {
+  listeners.erase(label);
 };
 
 AlsaMinder::AlsaMinder(const string &alsaDev, int rate, unsigned int numChan, const string &label, double now):
@@ -157,9 +122,7 @@ AlsaMinder::AlsaMinder(const string &alsaDev, int rate, unsigned int numChan, co
   shouldBeRunning(false),
   stopped(true),
   hasError(0),
-  numFD(0),
-  demodFMForRaw(false),
-  demodFMLastTheta(0)
+  numFD(0)
 {
   if (open()) {
     // there was an error, so throw an exception
@@ -246,7 +209,11 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
       snd_htimestamp_t ts;
       snd_pcm_uframes_t av;
       snd_pcm_htimestamp(pcm, &av, &ts);
-      frameTimestamp = ts.tv_sec + (double) ts.tv_nsec / 1.0e9 - (double) av / hwRate;
+      // ts is the time at which there were av frames available.
+      // The timestamp for the last frame available is thus
+      // later by (avail - av) / hwRate seconds.
+      // We maintain the timestamp of this newest frame
+      frameTimestamp = ts.tv_sec + (double) ts.tv_nsec / 1.0e9 + (double) (avail - av) / hwRate;
 
       // begin direct access to ALSA mmap buffers for the device
       const snd_pcm_channel_area_t *areas;
@@ -263,119 +230,26 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
       avail = have;
    
       totalFrames += avail;
-      int16_t *src0, *src1=0; // avoid compiler warning
-      int step;
+      sample_t * src0 = (sample_t *) (((unsigned char *) areas[0].addr) + areas[0].first / 8);
+      int step = areas[0].step / (8 * sizeof(sample_t)); // FIXME:  hardcoding S16_LE assumption
+      src0 += step * offset;
+
+      // for each listener, push the data into its ring buffer
+      // FIXME: we're assuming the samples coming from ALSA are interleaved.
+      // This is true for all devices we've used so far (funcubedongles and
+      // various USB microphones).
+
+      for (ListenerSet::iterator il = listeners.begin(); il != listeners.end(); ++il) {
+        circBuf * cb = il->second->getCircularBuffer();
+        int take = std::min((int) cb->capacity(), (int) (avail * numChan));
+#ifdef DEBUG
+        std::cerr << "Size: " << cb->size() << " adding " << take << std::endl;
+#endif
+        cb->insert(cb->end(), src0, src0 + take);
+      };
 
       /*
-        if a raw output listener exists, queue the new data onto it
-      */
-
-      if (rawListeners.size() > 0) {
-        // FIXME: assumes interleaved channels
-        src0 = (int16_t *) (((unsigned char *) areas[0].addr) + areas[0].first / 8);
-        step = areas[0].step / 16; // FIXME:  hardcoding S16_LE assumption
-        src0 += step * offset;
-
-        int16_t rawSamples[numChan * avail];
-        if (numChan == 2 && demodFMForRaw) {
-          // do FM demodulation with simple but expensive arctan!
-          float dthetaScale = hwRate / (2 * M_PI) / 75000.0 * 32767.0;
-          int16_t * samps = (int16_t *) src0;
-          for (int i=0; i < avail; ++i) {
-            // get phase angle in -pi..pi
-            float theta = atan2f(samps[2*i], samps[2*i+1]);
-            float dtheta = theta - demodFMLastTheta;
-            demodFMLastTheta = theta;
-            if (dtheta > M_PI) {
-              dtheta -= 2 * M_PI;
-            } else if (dtheta < -M_PI) {
-              dtheta += 2 * M_PI;
-            }
-            rawSamples[i] = roundf(dthetaScale * dtheta);
-          }
-        } else {
-          for (unsigned i=0; i < avail * numChan; ++i) {
-            rawSamples[i] = *src0;
-            //            src0 += step;
-            ++src0;
-          }
-        }
-
-        // now downsample rawSamples, using the running accumulator
-        // we downsample in-place, keeping track of the destination
-        // index in downSampleAvail;
-
-        int downSampleAvail = avail;
-
-        if (downSampleFactor > 1) {
-          for (unsigned j = 0; j < numChan; ++j) {
-            int16_t * rs = & rawSamples[j];
-            int16_t * ds = rs;
-            downSampleAvail = 0; // works the same for all channels
-            for (int i=0; i < avail; ++i) {
-              downSampleAccum[j] += *rs;
-              rs += numChan;
-              if (! --downSampleCount[j]) {
-                downSampleCount[j] = downSampleFactor;
-                // simple dithering: round to nearest int, but retain remainder in downSampleAccum
-                int16_t downSample = (downSampleAccum[j] + downSampleFactor / 2) / downSampleFactor;
-                *ds = downSample;
-                downSampleAccum[j] -= downSample * downSampleFactor;
-                ds += numChan;
-                ++ downSampleAvail;
-              }
-            }
-          }
-        }
-
-        // there are now downSampleAvail samples, stored in rawSamples[0..downSampleAvail * numChan - 1]
-
-        for (RawListenerSet::iterator ir = rawListeners.begin(); ir != rawListeners.end(); /**/) {
-
-          if (Pollable * ptr = (ir->second).lock().get()) {
-            ptr->queueOutput((char *) rawSamples, downSampleAvail * 2 * numChan, frameTimestamp ); // NB: hardcoded S16_LE sample size
-            ++ir;
-          } else {
-            RawListenerSet::iterator to_delete = ir++;
-            rawListeners.erase(to_delete);
-          }
-        }
-      }
-      /*
-      copy from ALSA mmap buffers to each attached plugin's buffer,
-      converting from S16_LE to float, and calling the plugin if its
-      buffer has reached blocksize
-      */
-
-      for (PluginRunnerSet::iterator ip = plugins.begin(); ip != plugins.end(); /**/) {
-        // we are going out on a limb and assuming the step is the same for both channels
-
-        src0 = (int16_t *) (((unsigned char *) areas[0].addr) + areas[0].first / 8);
-        step = areas[0].step / 16; // FIXME:  hardcoding S16_LE assumption
-        src0 += step * offset;
-                    
-        if (numChan == 2) {
-          src1 = (int16_t *) (((unsigned char *) areas[1].addr) + areas[1].first / 8);
-          src1 += step * offset;
-        }
-
-        if (boost::shared_ptr < PluginRunner > ptr = (ip->second).lock()) {
-          ptr->handleData(avail, src0, src1, step, frameTimestamp);
-          ++ip;
-        } else {
-          PluginRunnerSet::iterator to_delete = ip++;
-          plugins.erase(to_delete);
-        }
-      }
-      /*
-      Tell ALSA we're finished using its internal mmap buffer.  We do
-      this after calling the plugin, which means we may be hanging on
-      to it for a long time, but this way we can process all available
-      data with a single pair of calls to snd_pcm_mmap_begin and
-      snd_pcm_mmap_commit. We've tried to make the buffer for each
-      device much larger than a single period, so that ALSA has plenty
-      of room to store new data even while we have this chunk of its
-      ring buffer locked up.
+        Tell ALSA we're finished using its internal mmap buffer.
       */
 
       if (0 > snd_pcm_mmap_commit (pcm, offset, avail)) {
@@ -383,20 +257,47 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
         msg << "{\"event\":\"devProblem\",\"error\":\" snd_pcm_mmap_commit returned with error " << (-errcode) << "\",\"devLabel\":\"" << label << "\"}\n";
         Pollable::asyncMsg(msg.str());
       }
+  
+      // now for each listener, send as many blocks as are available
+      for (ListenerSet::iterator il = listeners.begin(); il != listeners.end(); /**/) {
+        AudioAdapter * ptr = il->second;
+        circBuf *cb = ptr->getCircularBuffer();
+        int bs = ptr->getBlockSize();
+        do {
+          if (bs != 0 && cb->size() < bs * numChan)
+            break;
+          int discard = ptr->handleData (cb->array_one(), cb->array_two(), frameTimestamp - (cb->size() - 1.0) / hwRate);
+          // discard is how many samples we can discard from the front of the ring buffer
+          // if negative, the ultimate listener no longer exists, so we should remove it from here.
+          if (discard < 0) {
+            ListenerSet::iterator to_delete = il++;
+            listeners.erase(to_delete);
+            break;
+            // FIXME: delete this listener from the set
+          } else {
+#ifdef DEBUG
+            std::cerr << "Size: " << cb->size() << " delete " << discard << std::endl;
+#endif
+            cb->erase_begin(discard);
+          }
+        } while (cb->size()); // loop around again, in case we've received more than one block's worth of data.
+        ++il;
+      }
+    } else if (shouldBeRunning && lastDataReceived >= 0 && timeNow - lastDataReceived > MAX_AUDIO_QUIET_TIME) {
+      // this device appears to have stopped delivering audio; try restart it
+      std::ostringstream msg;
+      // generate a JSON fragment, and send as async message to control socket
+      msg << "\"event\":\"devStalled\",\"error\":\"no data received for " << (timeNow - lastDataReceived) << " secs;\",\"devLabel\":\"" << label << "\"";
+      Pollable::asyncMsg(msg.str());
+      lastDataReceived = timeNow; // wait before next restart
+      stop(timeNow);
+      Pollable::requestPollFDRegen();
     }
-  } else if (shouldBeRunning && lastDataReceived >= 0 && timeNow - lastDataReceived > MAX_AUDIO_QUIET_TIME) {
-    // this device appears to have stopped delivering audio; try restart it
-    std::ostringstream msg;
-    // generate a JSON fragment, and send as async message to control socket
-    msg << "\"event\":\"devStalled\",\"error\":\"no data received for " << (timeNow - lastDataReceived) << " secs;\",\"devLabel\":\"" << label << "\"";
-    Pollable::asyncMsg(msg.str());
-    lastDataReceived = timeNow; // wait before next restart
-    stop(timeNow);
-    Pollable::requestPollFDRegen();
   }
 };
-        
+
 void
-AlsaMinder::setDemodFMForRaw(bool demod) {
-  demodFMForRaw = demod;
+AlsaMinder::addListener (string & label, AudioAdapter *ad) {
+  listeners.insert(std::pair < string, AudioAdapter *> (label, ad));
 };
+        

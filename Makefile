@@ -1,8 +1,8 @@
 CCOPTS_PRODUCTION := -I. -O3 -Wall -fPIC -ftree-vectorize -ffast-math  
-CCOPTS_DEBUG      := -I. -g3 -Wall -fPIC -ftree-vectorize -ffast-math
+CCOPTS_DEBUG      := -I. -g3 -Wall -fPIC -ftree-vectorize -ffast-math -DDEBUG
 
-CCOPTS := $(CCOPTS_PRODUCTION)
-#CCOPTS := $(CCOPTS_DEBUG)
+#CCOPTS := $(CCOPTS_PRODUCTION)
+CCOPTS := $(CCOPTS_DEBUG)
 
 all: vamp-alsa-host
 
@@ -15,6 +15,9 @@ install: vamp-alsa-host
 	cp vamp-host /usr/bin
 
 AlsaMinder.o: AlsaMinder.cpp
+	g++ $(CCOPTS) -c -o $@ $<
+
+AudioAdapter.o: AudioAdapter.cpp
 	g++ $(CCOPTS) -c -o $@ $<
 
 PluginRunner.o: PluginRunner.cpp
@@ -41,7 +44,7 @@ vamp-alsa-host.o: vamp-alsa-host.cpp
 vamp-host.o: vamp-host.cpp
 	g++  $(CCOPTS) -c -o $@ $<
 
-vamp-alsa-host:  vamp-alsa-host.o TCPListener.o TCPConnection.o Pollable.o PluginRunner.o VampAlsaHost.o AlsaMinder.o WavFileWriter.o
+vamp-alsa-host:  vamp-alsa-host.o AudioAdapter.o TCPListener.o TCPConnection.o Pollable.o PluginRunner.o VampAlsaHost.o AlsaMinder.o WavFileWriter.o
 	g++ $(CCOPTS) -o $@ $^ -lasound -lm -ldl -lrt -lvamp-hostsdk -lboost_filesystem -lboost_system -lboost_thread -lfftw3f
 
 vamp-host: vamp-host.o
