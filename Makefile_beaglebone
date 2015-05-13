@@ -17,6 +17,9 @@ install: vamp-alsa-host
 AlsaMinder.o: AlsaMinder.cpp
 	g++ $(CCOPTS) -c -o $@ $<
 
+AudioAdapter.o: AudioAdapter.cpp
+	g++ $(CCOPTS) -c -o $@ $<
+
 PluginRunner.o: PluginRunner.cpp
 	g++ $(CCOPTS) -c -o $@ $<
 
@@ -38,8 +41,8 @@ WavFileWriter.o: WavFileWriter.cpp
 vamp-alsa-host.o: vamp-alsa-host.cpp
 	g++ $(CCOPTS) -c -o $@ $<
 
-vamp-alsa-host:  vamp-alsa-host.o TCPListener.o TCPConnection.o Pollable.o PluginRunner.o VampAlsaHost.o AlsaMinder.o WavFileWriter.o
-	g++ $(CCOPTS) -o $@ $^ -lasound -lm -ldl -lrt -lvamp-hostsdk -lboost_filesystem -lboost_system -lboost_thread
+vamp-alsa-host:  vamp-alsa-host.o AudioAdapter.o TCPListener.o TCPConnection.o Pollable.o PluginRunner.o VampAlsaHost.o AlsaMinder.o WavFileWriter.o
+	g++ $(CCOPTS) -o $@ $^ -lasound -lm -ldl -lrt -lvamp-hostsdk -lboost_filesystem -lboost_system -lboost_thread -lfftw3f
 
 # DO NOT DELETE THIS LINE -- make depend depends on it.
 
