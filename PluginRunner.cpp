@@ -65,14 +65,15 @@ int PluginRunner::loadPlugin() {
 
   // allocate buffers to transfer float audio data to plugin
 
+  freqDomain = plugin->getInputDomain() == Vamp::Plugin::FrequencyDomain;
+
   plugbuf = new float*[numChan];
   for (unsigned c = 0; c < numChan; ++c)
     // use fftwf_alloc_real to make sure we have alignment suitable for in-place SIMD FFTs 
-    plugbuf[c] =  fftwf_alloc_real(blockSize + 2);  // FIXME: is "+2" only to leave room for DFT?; 
+    plugbuf[c] =  fftwf_alloc_real(blockSize + freqDomain ? 2 : 0);  // FIXME: is "+2" only to leave room for DFT?; 
 
   // if requesting frequency domain, allocate a windowing coefficient buffer and fill it
-  if (plugin->getInputDomain() == Vamp::Plugin::FrequencyDomain) {
-    freqDomain = true;
+  if (freqDomain) {
     winBuf = hammingWindow(blockSize);
   }
     

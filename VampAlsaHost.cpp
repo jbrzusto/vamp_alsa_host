@@ -109,7 +109,7 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
             } else {
               new WavFileWriter (label, wavLabel, path_template, frames, rate, p->numChan);
               AudioAdapter * aa = new AudioAdapter (p->rate, p->hwRate, p->numChan, p->PERIOD_FRAMES, 
-                                                    frames ? AudioAdapter::OT_FM : AudioAdapter::OT_INT,
+                                                    AudioAdapter::OT_INT,
                                                     0, 0, wavLabel, 0, false, frames);
               p->addListener(wavLabel, aa);
             }
