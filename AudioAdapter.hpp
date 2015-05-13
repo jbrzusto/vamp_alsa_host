@@ -94,6 +94,7 @@ protected:
   circBuf cb; //!< circular buffer of raw interleaved samples
 
   int numOutChan; //!< equals numChan except that if output is FM it is 1.
+  int outputBlockSize; //!< equals blockSize, except blocksize+2 if output type is SPECTRUM 
 
   int   downSampleCount;  //!< count of how many samples we've accumulated since last down sample
   int   downSampleAccum[MAX_CHANNELS];  //!< accumulator for downsampling
@@ -101,10 +102,11 @@ protected:
   int16_t * downSampleBuf; // !< if downsampling and integer output is needed, this is the buffer of interleaved, downsampled data
 
   float *winBuf; //!< hold windowing coefficients if output type is SPECTRUM
-  float * fftInput; //!< hold input data for FFT; if numChan is 1, this is really fftwf_complex (i.e. interleaved)
   fftwf_plan fftPlan; //!< hold FFTW plan, if needed
 
   sample_t           downSampleFactor; // by what factor do we downsample input audio for raw listeners
+
+  float demodFMLastTheta; // last theta while FM-demodulating signal
 
   // internal member functions
   float * hammingWindow(int N); //!< generate a Hamming window of size N

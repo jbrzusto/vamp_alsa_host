@@ -89,7 +89,7 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
       if (word == "rawStream") {
         // set fm on/off and add a raw listener
         // cancelling the listen will close the connection.
-        AudioAdapter * aa = new AudioAdapter (p->rate, p->hwRate, p->numChan, p->PERIOD_FRAMES, 
+        AudioAdapter * aa = new AudioAdapter (rate, p->hwRate, p->numChan, p->PERIOD_FRAMES, 
                                           frames ? AudioAdapter::OT_FM : AudioAdapter::OT_INT,
                                               0, 0, connLabel, 0, true, 0);
         p->addListener(connLabel, aa);
@@ -124,6 +124,8 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
       reply << "{\"error\": \"Error: LABEL does not specify a known open device\"}\n";
     }
   } else if (word == "fmOn" || word == "fmOff") {
+    // FIXME: should be specifying a particular AudioAdapter, not the device, since
+    // different plugins or raw listeners can independetly have FM demod on or off.
     string label;
     cmd >> label;
     AlsaMinder *p = dynamic_cast < AlsaMinder * > (Pollable::lookupByName(label));

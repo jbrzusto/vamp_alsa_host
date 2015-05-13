@@ -138,7 +138,8 @@ PluginRunner::PluginRunner(const string &label, const string &devLabel, int rate
   resampleCountdown(resampleDecim),
   partialFrameSum(new int[numChan]),
   lastFrametimestamp(0),
-  freqDomain(false)
+  freqDomain(false),
+  channelOutputCount(0)
 {
 
   // try load the plugin and throw if we fail
@@ -178,100 +179,16 @@ bool
 PluginRunner::queueOutput(const char *p, uint32_t len, double timestamp) {
   // alsaMinder has a block of data for us; it has already been
   // put into the plugin's buffers.
-
-  RealTime rt = RealTime::fromSeconds( timestamp );
-  outputFeatures(plugin->process(plugbuf, rt), label);
+  // This method is called once per channel, so we wait until the
+  // call for the last channel before dispatching to the plugin.
+  if (++channelOutputCount == numChan) {
+    channelOutputCount = 0;
+    RealTime rt = RealTime::fromSeconds( timestamp );
+    outputFeatures(plugin->process(plugbuf, rt), label);
+  }
   return true;
 };
 
-
-// void PluginRunner::handleData(snd_pcm_sframes_t avail, int16_t *src0, int16_t *src1, int step, double frameTimestamp) {
-//   // alsaHandler has some data for us.  If src1 is NULL, it's only one channel; otherwise it's two channels
-
-//   int pfs0 = partialFrameSum[0];
-//   int pfs1 = partialFrameSum[1];
-//   int rc = resampleCountdown;
-  
-//   // get timestamp of first (hardware) frame in plugin's buffer
-//   frameTimestamp -= (double) framesInPlugBuf / rate + (double) (resampleDecim - rc) / hwRate;
-
-//   while (avail > 0) {
-//     int hw_frames_to_copy = std::min((int) avail, (blockSize - framesInPlugBuf - 1) * resampleDecim + rc);
-//     avail -= hw_frames_to_copy;
-//     int decimated_frame_count = (hw_frames_to_copy + (resampleDecim - rc)) / resampleDecim;
-//     float *pb0, *pb1;
-//     pb0 = plugbuf[0] + framesInPlugBuf;
-
-//     // choose an inner loop, depending on number of channels
-//     if (src1) {
-//       // two channels
-//       pb1 = plugbuf[1] + framesInPlugBuf;
-//       while (hw_frames_to_copy) {
-//         pfs0 += *src0;
-//         pfs1 += *src1;
-//         src0 += step;
-//         src1 += step;
-//         --hw_frames_to_copy;
-//         --rc;
-//         if (rc == 0) {
-//           *pb0++ = pfs0 * resampleScale;
-//           *pb1++ = pfs1 * resampleScale;
-//           pfs0 = pfs1 = 0;
-//           rc = resampleDecim;
-//         }
-//       }
-//     } else {
-//       // one channel
-//       while (hw_frames_to_copy) {
-//         pfs0 += *src0;
-//         src0 += step;
-//         --hw_frames_to_copy;
-//         --rc;
-//         if (rc == 0) {
-//           *pb0++ = pfs0 * resampleScale;
-//           pfs0 = 0;
-//           rc = resampleDecim;
-//         }
-//       }
-//     }
-//     framesInPlugBuf += decimated_frame_count;
-//     totalFrames += decimated_frame_count;
-//     if (framesInPlugBuf == blockSize) {
-//       // time to call the plugin
-          
-//       RealTime rt = RealTime::fromSeconds( frameTimestamp );
-//       outputFeatures(plugin->process(plugbuf, rt), label);
-
-//       // shift samples if we're not advancing by a full
-//       // block.
-//       // Too bad the VAMP specs don't let the
-//       // process() function deal with two segments for each
-//       // buffer; then we wouldn't need these wastefull calls
-//       // to memmove!  MAYBE FIXME: fake this by changing our own
-//       // plugin to have blockSize = stepSize and deal
-//       // internally with handling overlap!  Then fix this
-//       // code so copying from alsa's mmap segment is done in
-//       // one pass for all plugins waiting on a device, then
-//       // the mmap segment is marked as available, then
-//       // another pass calls process() on all plugins with
-//       // full buffers.
-
-//       if (stepSize < blockSize) {
-//         memmove(&plugbuf[0][0], &plugbuf[0][stepSize], (blockSize - stepSize) * sizeof(float));
-//         if (src1)
-//           memmove(&plugbuf[1][0], &plugbuf[1][stepSize], (blockSize - stepSize) * sizeof(float));
-//         framesInPlugBuf = blockSize - stepSize;
-//         frameTimestamp += (double) stepSize / rate;
-//       } else {
-//         framesInPlugBuf = 0;
-//         frameTimestamp += (double) blockSize / rate;
-//       }
-//     }
-//   }
-//   partialFrameSum[0] = pfs0;
-//   partialFrameSum[1] = pfs1;
-//   resampleCountdown = rc;
-// };
 
 void
 PluginRunner::outputFeatures(Plugin::FeatureSet features, string prefix)

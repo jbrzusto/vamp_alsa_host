@@ -15,10 +15,12 @@ AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, Au
   cb(PERIOD_FRAMES * 2 * numChan),
   downSampleBuf(0),
   winBuf(0),
-  fftInput(0)
+  demodFMLastTheta(0)
 {
   downSampleFactor = hwRate / rate;
-  if (ot == OT_INT && downSampleFactor > 1) {
+  // we use the downsample buffer to do in-place FM demodulation, when
+  // required
+  if (ot == OT_FM || (ot == OT_INT && downSampleFactor > 1)) {
     downSampleBuf = new int16_t [numChan * maxFrames];
   }
   downSampleCount = downSampleFactor;
@@ -36,7 +38,8 @@ AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, Au
     }
   }
 
-  numOutChan = (ot == OT_FM || ot == OT_SPECTRUM) ? 1 : numChan;
+  numOutChan = (ot == OT_FM) ? 1 : numChan;
+  outputBlockSize = blockSize + (ot == OT_SPECTRUM) ? 2 : 0;
 
   // maybe allocate output buffers
   if (buffs) {
@@ -46,15 +49,14 @@ AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, Au
     buffs = new float * [numOutChan];
     for (int i = 0; i < numOutChan; ++i) 
       // output buffer for FFT requires 2 extra slots
-      buffs[i] = fftwf_alloc_real(blockSize + ot == OT_SPECTRUM ? 2 : 0);
+      buffs[i] = fftwf_alloc_real(outputBlockSize);
   }
 
   // maybe allocate windowing function buffer and fftwf plan
   if (ot == OT_SPECTRUM) {
     winBuf = hammingWindow (blockSize);
-    fftInput = (float *) fftwf_alloc_real (blockSize);
     // single plan will be used with different output arrays
-    fftPlan = fftwf_plan_dft_r2c_1d( blockSize, fftInput, (fftwf_complex * ) buffs[0], FFTW_PATIENT); // '-1' for forward FFT plan
+    fftPlan = fftwf_plan_dft_r2c_1d( blockSize, buffs[0], (fftwf_complex * ) buffs[0], FFTW_PATIENT);
   }
 }
 
@@ -71,9 +73,6 @@ AudioAdapter::~AudioAdapter() {
   if (downSampleBuf)
     delete [] downSampleBuf;
 
-  if (fftInput)
-    fftwf_free(fftInput);
-
   if (ot == OT_SPECTRUM)
     fftwf_destroy_plan(fftPlan);
 };
@@ -83,11 +82,16 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
 {
   int avail = a1.second + a2.second;
 
-  Pollable *ptr = Pollable::lookupByNameShared(listenerLabel).get();
+  // if insufficient data, consume no samples and do nothing
 
-  // if insufficient data or consumer no longer eixsts, consume no samples and do nothing
-  if (avail < downSampleFactor || ! ptr)
+  if (avail < downSampleFactor)
     return 0;
+
+  // if consumer no longer exists, return error so that this
+  // adapter is removed from the set.
+  Pollable *ptr = Pollable::lookupByNameShared(listenerLabel).get();
+  if (! ptr)
+    return -1;
 
   int useFrames = (avail / numChan / downSampleFactor) * downSampleFactor;
   if (blockSize > 0 && useFrames > blockSize)
@@ -100,10 +104,12 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
 
   switch(ot) {
   case OT_INT:
+  case OT_FM:
     // downsample if necessary, then queue output
+    // Note: when ot == OT_FM, we run the full downsampling code even 
+    // if downSampleFactor == 1.
     {
-
-      if (downSampleFactor > 1) {
+      if (downSampleFactor > 1 || ot == OT_FM) {
         int k = 0;
             
         for(int s=0, use; s < 2 && (use=useSeg[s]); src=a2.first, ++s) {
@@ -119,7 +125,22 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
             }
           }
         }
-        ptr->queueOutput((const char *) downSampleBuf, k * sizeof(sample_t));
+        if (ot == OT_FM) {
+          float dthetaScale = rate / (2 * M_PI) / 75000.0 * 32767.0;
+          for (int i=0; i < useFrames; ++i) {
+            // get phase angle in -pi..pi
+            float theta = atan2f(downSampleBuf[2*i], downSampleBuf[2*i+1]);
+            float dtheta = theta - demodFMLastTheta;
+            demodFMLastTheta = theta;
+            if (dtheta > M_PI) {
+              dtheta -= 2 * M_PI;
+            } else if (dtheta < -M_PI) {
+              dtheta += 2 * M_PI;
+            }
+            downSampleBuf[i] = roundf(dthetaScale * dtheta);
+          }
+        }
+        ptr->queueOutput((const char *) downSampleBuf, useFrames * numOutChan * sizeof(sample_t));
       } else {
         for(int s=0, use; s < 2 && (use=useSeg[s]); src=a2.first, ++s)
           ptr->queueOutput((const char *) src, use * numChan * sizeof(sample_t));
@@ -129,10 +150,14 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
     break;
 
   case OT_FLOAT:
+  case OT_SPECTRUM:
     // downsample, then queue a block of output
     {
       int k = 0;
       float convFactor = 1.0 / (32767 * downSampleFactor);
+      // pre-scale data if using libfftw DFT, since it is unscaled.
+      if (ot == OT_SPECTRUM)
+        convFactor /= sqrtf(blockSize);
 
       if (downSampleFactor > 1) {
         for(int s=0, use; s < 2 && (use=useSeg[s]); src=a2.first, ++s) {
@@ -157,40 +182,25 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
           }
         }
       }
-      ptr->queueOutput((const char *)buffs[0], blockSize, frameTimestamp);
+      if (ot == OT_SPECTRUM) {
+        // window then FFT each channel of the input
+        for (int j = 0; j < numChan; ++j) {
+          float * buff = buffs[j];
+          for (int i = 0; i < blockSize; ++i) 
+            buff[i] *= winBuf[i];
+          fftwf_execute_dft_r2c(fftPlan, buff, (fftwf_complex *) buff);
+        }
+      }        
+      // queue output from each channel separately.
+      for (int j = 0; j < numChan; ++j)
+        ptr->queueOutput((const char *)buffs[j], outputBlockSize * sizeof(sample_t), frameTimestamp);
+
       return stepSize * numChan; // NB: stepSize, not block size, since we want caller to preserve the overlap samples
       // DONE
     }
     break;
-    
-  case OT_SPECTRUM:
-  // WILL USE: void fftw_execute_dft_r2c(     const fftw_plan p,     double *in, fftw_complex *out);
-    {
-    }
-    break;
-
-  case OT_FM:
-    {
-// FM demod:
-        // if (numChan == 2 && demodFMForRaw) {
-        //   // do FM demodulation with simple but expensive arctan!
-        //   float dthetaScale = hwRate / (2 * M_PI) / 75000.0 * 32767.0;
-        //   int16_t * samps = (int16_t *) src0;
-        //   for (int i=0; i < avail; ++i) {
-        //     // get phase angle in -pi..pi
-        //     float theta = atan2f(samps[2*i], samps[2*i+1]);
-        //     float dtheta = theta - demodFMLastTheta;
-        //     demodFMLastTheta = theta;
-        //     if (dtheta > M_PI) {
-        //       dtheta -= 2 * M_PI;
-        //     } else if (dtheta < -M_PI) {
-        //       dtheta += 2 * M_PI;
-        //     }
-        //     rawSamples[i] = roundf(dthetaScale * dtheta);
-        //   }
-    }
-    break;
-
+ default:
+   break;
   }
   return avail; // pretend we've consumed all frames
 };

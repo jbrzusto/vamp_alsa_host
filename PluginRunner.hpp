@@ -53,7 +53,7 @@ protected:
   int *              partialFrameSum;  // partial frame sums from previous call to handleData
   double             lastFrametimestamp; // frame timestamp from prvious call to handleData
   bool               freqDomain;       // true when plugin receives data in frequency domain
-
+  int                channelOutputCount; // count calls to queueOutput; only dispatch to plugin when all channels ready.
   // the output buffer gets filled before it can be written to a socket,
   // the oldest output is discarded line by line, so that any output line
   // is either completely written or not written at all.  For binary output,

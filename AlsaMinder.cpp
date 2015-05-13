@@ -242,9 +242,6 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
       for (ListenerSet::iterator il = listeners.begin(); il != listeners.end(); ++il) {
         circBuf * cb = il->second->getCircularBuffer();
         int take = std::min((int) cb->capacity(), (int) (avail * numChan));
-#ifdef DEBUG
-        std::cerr << "Size: " << cb->size() << " adding " << take << std::endl;
-#endif
         cb->insert(cb->end(), src0, src0 + take);
       };
 
@@ -260,6 +257,7 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
   
       // now for each listener, send as many blocks as are available
       for (ListenerSet::iterator il = listeners.begin(); il != listeners.end(); /**/) {
+        bool deleted = false;
         AudioAdapter * ptr = il->second;
         circBuf *cb = ptr->getCircularBuffer();
         int bs = ptr->getBlockSize();
@@ -272,16 +270,16 @@ void AlsaMinder::handleEvents ( struct pollfd *pollfds, bool timedOut, double ti
           if (discard < 0) {
             ListenerSet::iterator to_delete = il++;
             listeners.erase(to_delete);
+            deleted = true;
             break;
-            // FIXME: delete this listener from the set
-          } else {
-#ifdef DEBUG
-            std::cerr << "Size: " << cb->size() << " delete " << discard << std::endl;
-#endif
+          } else if (discard > 0) {
             cb->erase_begin(discard);
+          } else {
+            break;
           }
         } while (cb->size()); // loop around again, in case we've received more than one block's worth of data.
-        ++il;
+        if (! deleted)
+          ++il;
       }
     } else if (shouldBeRunning && lastDataReceived >= 0 && timeNow - lastDataReceived > MAX_AUDIO_QUIET_TIME) {
       // this device appears to have stopped delivering audio; try restart it
