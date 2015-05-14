@@ -104,7 +104,7 @@ protected:
   float *winBuf; //!< hold windowing coefficients if output type is SPECTRUM
   fftwf_plan fftPlan; //!< hold FFTW plan, if needed
 
-  sample_t           downSampleFactor; // by what factor do we downsample input audio for raw listeners
+  sample_t downSampleFactor; // by what factor do we downsample input audio for raw listeners
 
   float demodFMLastTheta; // last theta while FM-demodulating signal
 

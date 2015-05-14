@@ -110,7 +110,7 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
     // if downSampleFactor == 1.
     {
       if (downSampleFactor > 1 || ot == OT_FM) {
-        int k = 0;
+        int k = 0; // number of downsamples
             
         for(int s=0, use; s < 2 && (use=useSeg[s]); src=a2.first, ++s) {
           for (int i=0; i < use; ++i) {
@@ -127,7 +127,7 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
         }
         if (ot == OT_FM) {
           float dthetaScale = rate / (2 * M_PI) / 75000.0 * 32767.0;
-          for (int i=0; i < useFrames; ++i) {
+          for (int i=0, k2 = k/2; i < k2; ++i) {
             // get phase angle in -pi..pi
             float theta = atan2f(downSampleBuf[2*i], downSampleBuf[2*i+1]);
             float dtheta = theta - demodFMLastTheta;
@@ -140,7 +140,7 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
             downSampleBuf[i] = roundf(dthetaScale * dtheta);
           }
         }
-        ptr->queueOutput((const char *) downSampleBuf, useFrames * numOutChan * sizeof(sample_t));
+        ptr->queueOutput((const char *) downSampleBuf, k * sizeof(sample_t));
       } else {
         for(int s=0, use; s < 2 && (use=useSeg[s]); src=a2.first, ++s)
           ptr->queueOutput((const char *) src, use * numChan * sizeof(sample_t));

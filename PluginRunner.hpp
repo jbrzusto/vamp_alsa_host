@@ -65,43 +65,41 @@ public:
   PluginRunner(const string &label, const string &devLabel, int rate, int hwRate, int numChan, const string &pluginSOName, const string &pluginID, const string &pluginOutput, const ParamSet &ps);
   ~PluginRunner();
 
-  bool addOutputListener(string connLabel);
-  void removeOutputListener(string connLabel);
-  void removeAllOutputListeners();
-
-  int loadPlugin();
   //  void handleData(long avail, int16_t *src0, int16_t *src1, int step, double frameTimestamp);
   bool queueOutput(const char *p, uint32_t len, double timestamp);
 
+  /* this class does not receive or send data via file descriptors, so
+     the following methods are no-ops (and really, this shouldn't
+     descend from Pollable, but that's our base class.  FIXME:
+     refactor class hierarchy so queueOutput() is inherited from a
+     different parent than the fd-polling-related methods */
+
+  int getNumPollFDs() {return 0;}
+  int getPollFDs (struct pollfd * pollfds) {return 0;}
+  int getOutputFD(){return 0;}; 
+  void handleEvents (struct pollfd *pollfds, bool timedOut, double timeNow) {};
+
+  /* new methods */
+
+  bool addOutputListener(string connLabel);
+  void removeOutputListener(string connLabel);
+  void removeAllOutputListeners();
+  int loadPlugin();
   void outputFeatures(Plugin::FeatureSet features, string prefix);
   string toJSON();
-
-  int getNumPollFDs();
-                      // return number of fds used by this Pollable (negative means error)
-  int getPollFDs (struct pollfd * pollfds);
-
-  int getOutputFD(){return 0;}; 
-
-  void handleEvents (struct pollfd *pollfds, bool timedOut, double timeNow);
-
   void stop(double timeNow);
-
   int start(double timeNow);
-
   void setParameters(ParamSet &ps);
 
+  /* accessors */
+
   bool getFreqDomain() { return freqDomain;};
-  
   int getBlockSize() { return blockSize;};
-
   int getStepSize() { return stepSize;};
-
   float ** getPlugBuf() { return plugbuf;};
 
 private:
   void delete_privates();
-
-  float *hammingWindow(int N);
   
 };
 

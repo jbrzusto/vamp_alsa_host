@@ -41,11 +41,10 @@ int PluginRunner::loadPlugin() {
     return 1;
   }
 
-  // make sure the plugin is compatible: it must run in the time domain and accept an appropriate number of channels
+  // make sure the plugin is compatible: it must accept an appropriate number of channels
         
-  if (plugin->getInputDomain() != Plugin::TimeDomain
-      || plugin->getMinChannelCount() > numChan
-      || plugin->getMaxChannelCount() < numChan) {
+  if ( plugin->getMinChannelCount() > numChan
+       || plugin->getMaxChannelCount() < numChan) {
     return 2;
   }
 
@@ -57,12 +56,9 @@ int PluginRunner::loadPlugin() {
   if (blockSize == 0) {
     blockSize = 1024;
   }
-  if (stepSize == 0) {
+  if (stepSize == 0 || stepSize > blockSize) {
     stepSize = blockSize;
-  } else if (stepSize > blockSize) {
-    blockSize = stepSize;
   }
-
   // allocate buffers to transfer float audio data to plugin
 
   freqDomain = plugin->getInputDomain() == Vamp::Plugin::FrequencyDomain;
@@ -70,13 +66,8 @@ int PluginRunner::loadPlugin() {
   plugbuf = new float*[numChan];
   for (unsigned c = 0; c < numChan; ++c)
     // use fftwf_alloc_real to make sure we have alignment suitable for in-place SIMD FFTs 
-    plugbuf[c] =  fftwf_alloc_real(blockSize + (freqDomain ? 2 : 0));  // FIXME: is "+2" only to leave room for DFT?; 
+    plugbuf[c] =  fftwf_alloc_real(blockSize + (freqDomain ? 2 : 0));
 
-  // if requesting frequency domain, allocate a windowing coefficient buffer and fill it
-  if (freqDomain) {
-    winBuf = hammingWindow(blockSize);
-  }
-    
   // make sure the named output is valid
         
   Plugin::OutputList outputs = plugin->getOutputDescriptors();
@@ -288,34 +279,3 @@ PluginRunner::setParameters(ParamSet &ps) {
     for (ParamSetIter it = ps.begin(); it != ps.end(); ++it)
       plugin->setParameter(it->first, it->second);
 };
-
-int
-PluginRunner::getNumPollFDs() {
-  /* do nothing */
-  return 0;
-};
-
-int 
-PluginRunner::getPollFDs (struct pollfd * pollfds) {
-  /* do nothing */
-  return 0;
-};
-
-void
-PluginRunner::handleEvents (struct pollfd *pollfds, bool timedOut, double timeNow)
-{
-  /* do nothing */
-};
-
-float *
-PluginRunner::hammingWindow(int N)
-{
-    // allocate and generate a float array of size N of
-    // Hamming window coefficients
-
-    float * window = fftwf_alloc_real(N);
-    for (int i = 0; i < N; ++i) {
-        window[i] = 0.54 - 0.46 * cosf(2 * M_PI * i / (N - 1));
-    }
-    return window;
-}

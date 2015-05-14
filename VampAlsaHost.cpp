@@ -337,7 +337,7 @@ VampAlsaHost::commandHelp =
           "          connections already receiving data from an attached plugin.\n"
           "          Note: this command does not return a reply unless there is an error.\n\n"
   
-          "       rawStream DEV_LABEL RATE FRAMES\n"
+          "       rawStream DEV_LABEL RATE FRAMES [FFT_SIZE [FFT_STEP]]\n"
           "          Write raw data to the TCP connection.\n"
           "          DEV_LABEL: the device from which to obtain raw data\n"
           "          RATE:   the frame rate to use.  The actual frame rate will be the closest frame rate which\n"
@@ -345,6 +345,14 @@ VampAlsaHost::commandHelp =
           "          FRAMES: the number of frames to write.  After the last frame is written, VAH will print a\n"
           "                  message of the form {\"message\": \"rawDone\", \"dev\": \"DEV_LABEL\"} to the TCP connection\n"
           "                  which issued the rawFile command.\n"
+          "          FFT_SIZE: if specified, indicates output will be result of running an FFT on input, with a window\n"
+          "                  of size FFT_SIZE, and a Hamming windowing function.  Output is 2 * FFT_SIZE + 2 floats per channel,\n"
+          "                  with each channel appearing contiguously; ie. the 2 * FFT_SIZE + 2 Fourier coefficients for the first\n"
+          "                  channel appear before 2 * FFT_SIZE + 2 Fourier coefficients for the second channel.\n"
+          "          FFT_STEP: if specified, indicates the number of frames to advance between consecutive FFTs.\n"
+          "                  Default is FFT_SIZE, which means no overlap in samples between consecutive FFTs.\n"
+          "                  e.g. FFT_STEP = FFT_SIZE / 2 is 50% overlap in samples between consecutive FFTs.\n\n"
+          
           "          If an error occurs when writing to a file, VAH will print a message of the form\n"
           "                  {\"message\": \"rawError\", \"dev\": \"DEV_LABEL\", \"errno\": errno} to the TCP connection\n"
 
