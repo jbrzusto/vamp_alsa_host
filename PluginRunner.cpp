@@ -70,7 +70,7 @@ int PluginRunner::loadPlugin() {
   plugbuf = new float*[numChan];
   for (unsigned c = 0; c < numChan; ++c)
     // use fftwf_alloc_real to make sure we have alignment suitable for in-place SIMD FFTs 
-    plugbuf[c] =  fftwf_alloc_real(blockSize + freqDomain ? 2 : 0);  // FIXME: is "+2" only to leave room for DFT?; 
+    plugbuf[c] =  fftwf_alloc_real(blockSize + (freqDomain ? 2 : 0));  // FIXME: is "+2" only to leave room for DFT?; 
 
   // if requesting frequency domain, allocate a windowing coefficient buffer and fill it
   if (freqDomain) {

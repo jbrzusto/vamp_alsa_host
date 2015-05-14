@@ -39,7 +39,7 @@ AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, Au
   }
 
   numOutChan = (ot == OT_FM) ? 1 : numChan;
-  outputBlockSize = blockSize + (ot == OT_SPECTRUM) ? 2 : 0;
+  outputBlockSize = blockSize + (ot == OT_SPECTRUM ? 2 : 0);
 
   // maybe allocate output buffers
   if (buffs) {
