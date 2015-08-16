@@ -200,6 +200,11 @@ void terminate (int p)
 int 
 main(int argc, char **argv)
 {
+    // close file descriptors from parent, except the big 3
+
+    for (int i=getdtablesize(); i>=3; --i) 
+        close(i);
+
     enum {
         COMMAND_HELP = 'h',
         COMMAND_SOCKET_NAME = 's',

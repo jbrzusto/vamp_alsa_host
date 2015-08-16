@@ -1,6 +1,6 @@
 #include "AudioAdapter.hpp"
 
-AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, AudioAdapter::OutputType ot, int blockSize, int stepSize, string &listenerLabel, float ** buffs, bool writeWavFileHeader, int numFrames) :
+AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, AudioAdapter::OutputType ot, int blockSize, int stepSize, string &listenerLabel, float ** extbuffs, bool writeWavFileHeader, int numFrames) :
   rate(rate),
   hwRate(hwRate),
   numChan(numChan),
@@ -10,7 +10,7 @@ AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, Au
   stepSize(stepSize),
   numFrames(numFrames),
   listenerLabel(listenerLabel),
-  buffs(buffs),
+  buffs(extbuffs),
   writeWavFileHeader(writeWavFileHeader),
   cb(PERIOD_FRAMES * 2 * numChan),
   downSampleBuf(0),
@@ -39,17 +39,20 @@ AudioAdapter::AudioAdapter (int rate, int hwRate, int numChan, int maxFrames, Au
   }
 
   numOutChan = (ot == OT_FM) ? 1 : numChan;
-  outputBlockSize = blockSize + (ot == OT_SPECTRUM ? 2 : 0);
+  if (ot != OT_SPECTRUM)
+    outputBlockSize = blockSize * sizeof(sample_t);
+  else
+    outputBlockSize = (blockSize + 2) * sizeof(float);
 
   // maybe allocate output buffers
-  if (buffs) {
+  if (extbuffs) {
     weOwnBuffs = false;
   } else {
     weOwnBuffs = true;
     buffs = new float * [numOutChan];
     for (int i = 0; i < numOutChan; ++i) 
       // output buffer for FFT requires 2 extra slots
-      buffs[i] = fftwf_alloc_real(outputBlockSize);
+      buffs[i] = fftwf_alloc_real(blockSize + 2);
   }
 
   // maybe allocate windowing function buffer and fftwf plan
@@ -193,7 +196,7 @@ AudioAdapter::handleData(circBuf::array_range a1, circBuf::array_range a2, doubl
       }        
       // queue output from each channel separately.
       for (int j = 0; j < numChan; ++j)
-        ptr->queueOutput((const char *)buffs[j], outputBlockSize * sizeof(sample_t), frameTimestamp);
+        ptr->queueOutput((const char *)buffs[j], outputBlockSize, frameTimestamp);
 
       return stepSize * numChan; // NB: stepSize, not block size, since we want caller to preserve the overlap samples
       // DONE

@@ -79,19 +79,30 @@ string VampAlsaHost::runCommand(string cmdString, string connLabel) {
     cmd >> rate;
     uint32_t frames = 0;
     cmd >> frames; // this is @ frames for rawFile, FM demod flag for rawStream
+    int blockSize = 0;
+    int stepSize = 0;
     char path_template [MAX_CMD_STRING_LENGTH + 1];
     path_template[0] = 0;
-    cmd.ignore(MAX_CMD_STRING_LENGTH, '"');
-    cmd.getline(path_template, MAX_CMD_STRING_LENGTH, '"');
-   
+    if (word == "rawFile") {
+      cmd.ignore(MAX_CMD_STRING_LENGTH, '"');
+      cmd.getline(path_template, MAX_CMD_STRING_LENGTH, '"');
+    } else if (word == "rawStream") {
+      cmd >> blockSize >> stepSize;
+      if (stepSize == 0)
+        stepSize = blockSize;
+    }
     AlsaMinder *p = dynamic_cast < AlsaMinder * > (Pollable::lookupByName(label));
     if (p) {
       if (word == "rawStream") {
         // set fm on/off and add a raw listener
+        // if blockSize has been specified, we're outputting spectrum
+        // data, and we don't write a .WAV file header
         // cancelling the listen will close the connection.
         AudioAdapter * aa = new AudioAdapter (rate, p->hwRate, p->numChan, p->PERIOD_FRAMES, 
-                                          frames ? AudioAdapter::OT_FM : AudioAdapter::OT_INT,
-                                              0, 0, connLabel, 0, true, 0);
+                                              frames ? AudioAdapter::OT_FM 
+                                              : blockSize ? AudioAdapter::OT_SPECTRUM
+                                              : AudioAdapter::OT_INT,
+                                              blockSize, stepSize, connLabel, 0, blockSize == 0, 0);
         p->addListener(connLabel, aa);
       } else if (word == "rawStreamOff") {
         p->removeListener(connLabel);
